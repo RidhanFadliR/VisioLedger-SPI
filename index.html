@@ -258,6 +258,14 @@ table th { white-space:nowrap; padding:.75rem 1rem; vertical-align:middle; }
   </div>
 </div>
 
+<!-- OVERLAY ANCAMAN VISUAL (menutup seluruh layar) -->
+<div id="global-threat-overlay" class="hidden fixed inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-rose-950/80 backdrop-blur-xl">
+  <div class="w-16 h-16 rounded-full bg-rose-900 border border-rose-500 flex items-center justify-center text-2xl mb-3">📱</div>
+  <h3 class="text-lg font-bold text-white uppercase tracking-wider">ANCAMAN VISUAL TERDETEKSI!</h3>
+  <p class="text-xs text-rose-200 max-w-md mt-2 leading-relaxed">Lensa kamera ponsel atau perangkat perekam terdeteksi di belakang pengguna. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir sampai ancaman dinyatakan selesai.</p>
+  <button onclick="toggleThreatBlur(false)" class="mt-4 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs py-2.5 px-6 rounded-xl shadow-xl transition">Matikan Simulasi / Restorasi Tampilan</button>
+</div>
+
 <!-- WEBCAM WIDGET -->
 <div id="webcam-simulator-widget" class="hidden fixed bottom-4 right-4 z-40 bg-cyber-card border border-cyber-border rounded-2xl p-3 shadow-2xl w-64 space-y-2">
   <div id="cam-drag-handle" title="Tarik untuk memindahkan" style="touch-action:none" class="flex items-center justify-between text-[11px] font-bold text-slate-200 cursor-move select-none"><span>⠿ 🎥 AI Visual Safeguard (L2)</span><span class="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-800 px-1.5 py-0.5 rounded font-mono">Live 30 FPS</span></div>
@@ -536,7 +544,30 @@ function completeLogin(){
   }, 1500);
 }
 
+const THREAT_SCREENS = ['screen-ledger', 'screen-files', 'screen-audit'];
+function resetThreatUI(){
+  isThreatActive = false;
+  THREAT_SCREENS.forEach(id => document.getElementById(id).classList.remove('blur-active'));
+  document.getElementById('global-threat-overlay').classList.add('hidden');
+  document.getElementById('webcam-threat-badge').classList.add('hidden');
+  document.getElementById('threat-toggle-text').innerText = 'Tes Deteksi Kamera HP';
+}
 function toggleThreatBlur(active){
+  if (active === isThreatActive) return;
+  isThreatActive = active;
+  THREAT_SCREENS.forEach(id => document.getElementById(id).classList.toggle('blur-active', active));
+  document.getElementById('global-threat-overlay').classList.toggle('hidden', !active);
+  document.getElementById('webcam-threat-badge').classList.toggle('hidden', !active);
+  document.getElementById('threat-toggle-text').innerText = active ? 'Matikan Ancaman Visual' : 'Tes Deteksi Kamera HP';
+  if (active){
+    closeDownloadModal();
+    addAuditLog('VISUAL_THREAT_DETECTED', 'Lensa kamera HP terdeteksi. Seluruh layar diburamkan, aksi unduh dan unggah diblokir.');
+  } else {
+    addAuditLog('VISUAL_THREAT_CLEARED', 'Ancaman visual dinyatakan selesai. Tampilan dipulihkan.');
+  }
+}
+
+function toggleThreatBlurOld(active){
   isThreatActive = active;
   const w = document.getElementById('ledger-content-wrapper'), o = document.getElementById('threat-overlay'),
         b = document.getElementById('webcam-threat-badge'), t = document.getElementById('threat-toggle-text');
@@ -594,6 +625,7 @@ function handleFileUpload(event){
 }
 
 function openDownloadModal(id){
+  if (isThreatActive) return;
   selectedFileForDownload = repositoryFiles.find(f => f.id === id);
   if (!selectedFileForDownload) return;
   document.getElementById('modal-user-id').innerText = `${activeUser.name} (${activeUser.id})`;
@@ -604,6 +636,7 @@ function openDownloadModal(id){
 function closeDownloadModal(){ document.getElementById('download-modal').classList.add('hidden'); selectedFileForDownload = null; }
 
 function executeForensicDownload(){
+  if (isThreatActive) return;
   if (!selectedFileForDownload) return;
   const name = selectedFileForDownload.name;
   const blob = new Blob([selectedFileForDownload.content], { type:'text/plain' });
@@ -624,6 +657,7 @@ function simulateOffHourLogout(){
 }
 
 function performLogout(reason){
+  resetThreatUI();
   isLoggedIn = false;
   document.getElementById('global-header').classList.add('hidden');
   document.getElementById('webcam-simulator-widget').classList.add('hidden');
