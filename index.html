@@ -54,7 +54,7 @@ table th { white-space:nowrap; padding:.75rem 1rem; vertical-align:middle; }
   <div class="flex flex-wrap items-center justify-center md:justify-end gap-2.5">
     <div class="bg-slate-950 border border-slate-800 rounded-xl p-1 flex space-x-1">
       <button onclick="switchScreen('screen-ledger')" id="nav-btn-ledger" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 text-slate-950 transition">📒 Pembukuan</button>
-      <button onclick="switchScreen('screen-files')" id="nav-btn-files" class="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-400 hover:text-white transition">📁 Berkas Dokumen</button>
+      <button onclick="switchScreen('screen-files')" id="nav-btn-files" class="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-400 hover:text-white transition">📁 Berkas Dokumen <span id="nav-files-badge" class="hidden ml-1 bg-rose-600 text-white text-[9px] rounded-full px-1.5 py-0.5">0</span></button>
       <button onclick="switchScreen('screen-audit')" id="nav-btn-audit" class="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-400 hover:text-white transition">📋 Audit Trail</button>
     </div>
     <button onclick="simulateOffHourLogout()" class="bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/80 text-xs font-semibold px-3 py-1.5 rounded-xl transition shadow-md">
@@ -199,6 +199,7 @@ table th { white-space:nowrap; padding:.75rem 1rem; vertical-align:middle; }
         <input type="file" id="file-upload-input" onchange="handleFileUpload(event)" class="hidden">
       </div>
     </div>
+    <div id="access-requests-panel"></div>
     <div onclick="document.getElementById('file-upload-input').click()" class="border-2 border-dashed border-slate-800 hover:border-purple-500/60 rounded-xl p-6 text-center bg-slate-950/50 cursor-pointer transition flex flex-col items-center justify-center space-y-2">
       <div class="w-12 h-12 rounded-full bg-purple-950/80 border border-purple-800 text-purple-400 flex items-center justify-center text-xl">＋</div>
       <div class="text-xs font-bold text-slate-200">Klik di sini atau seret berkas keuangan Anda untuk diunggah</div>
@@ -261,7 +262,7 @@ table th { white-space:nowrap; padding:.75rem 1rem; vertical-align:middle; }
 <div id="global-threat-overlay" class="hidden fixed inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-rose-950/80 backdrop-blur-xl">
   <div class="w-16 h-16 rounded-full bg-rose-900 border border-rose-500 flex items-center justify-center text-2xl mb-3">📱</div>
   <h3 class="text-lg font-bold text-white uppercase tracking-wider">ANCAMAN VISUAL TERDETEKSI!</h3>
-  <p class="text-xs text-rose-200 max-w-md mt-2 leading-relaxed">Lensa kamera ponsel atau perangkat perekam terdeteksi di belakang pengguna. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir sampai ancaman dinyatakan selesai.</p>
+  <p id="threat-overlay-text" class="text-xs text-rose-200 max-w-md mt-2 leading-relaxed">Lensa kamera ponsel atau perangkat perekam terdeteksi di belakang pengguna. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir sampai ancaman dinyatakan selesai.</p>
   <button onclick="toggleThreatBlur(false)" class="mt-4 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs py-2.5 px-6 rounded-xl shadow-xl transition">Matikan Simulasi / Restorasi Tampilan</button>
 </div>
 
@@ -355,6 +356,7 @@ function switchScreen(id){
   document.getElementById('nav-btn-files').className = id==='screen-files' ? on : off;
   document.getElementById('nav-btn-audit').className = id==='screen-audit' ? on : off;
   if (id === 'screen-files') renderFilesTable();
+  updateNavBadge();
 }
 
 // ===== FACE ID (prototipe: pencocokan pola wajah di browser) =====
@@ -551,7 +553,7 @@ function resetThreatUI(){
   document.getElementById('webcam-threat-badge').classList.add('hidden');
   document.getElementById('threat-toggle-text').innerText = 'Tes Deteksi Kamera HP';
 }
-function toggleThreatBlur(active){
+function toggleThreatBlur(active, reason){
   if (active === isThreatActive) return;
   isThreatActive = active;
   THREAT_SCREENS.forEach(id => document.getElementById(id).classList.toggle('blur-active', active));
@@ -560,7 +562,10 @@ function toggleThreatBlur(active){
   document.getElementById('threat-toggle-text').innerText = active ? 'Matikan Ancaman Visual' : 'Tes Deteksi Kamera HP';
   if (active){
     closeDownloadModal();
-    addAuditLog('VISUAL_THREAT_DETECTED', 'Lensa kamera HP terdeteksi. Seluruh layar diburamkan, aksi unduh dan unggah diblokir.');
+    document.getElementById('threat-overlay-text').textContent = reason === 'mass-download'
+      ? 'Terdeteksi upaya mengunduh beberapa berkas terkunci dalam satu jendela akses. Akses dicabut, seluruh layar diburamkan, dan aksi unduh serta unggah diblokir sampai ancaman dinyatakan selesai.'
+      : DEFAULT_THREAT_TEXT;
+    if (reason !== 'mass-download') addAuditLog('VISUAL_THREAT_DETECTED', 'Lensa kamera HP terdeteksi. Seluruh layar diburamkan, aksi unduh dan unggah diblokir.');
   } else {
     addAuditLog('VISUAL_THREAT_CLEARED', 'Ancaman visual dinyatakan selesai. Tampilan dipulihkan.');
   }
@@ -598,7 +603,100 @@ function handleCreateJournal(e){
   notify(`Jurnal Transaksi Mitra '${partner}' Berhasil Dicatat!`);
 }
 
+// ===== AKSES BERKAS TERKUNCI =====
+const ACCESS_WINDOW_MS = 60000;      // lama akses setelah disetujui (60 detik)
+const DOWNLOAD_ALERT_COUNT = 2;      // unduhan berkas terkunci dalam satu jendela akses yang memicu ancaman
+const DEFAULT_THREAT_TEXT = 'Lensa kamera ponsel atau perangkat perekam terdeteksi di belakang pengguna. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir sampai ancaman dinyatakan selesai.';
+let accessRequests = [], accessGrants = {};
+repositoryFiles.find(f => f.id === 'file_003').locked = false; // berkas lain dan unggahan baru terkunci secara default
+
+function isLocked(f){ return f.locked !== false; }
+function fmtLeft(ms){ const s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function validGrant(uid){ const g = accessGrants[uid]; if (g && g.expiresAt > Date.now()) return g; if (g) delete accessGrants[uid]; return null; }
+function myPending(){ return accessRequests.find(r => r.requesterId === activeUser.id && r.status === 'pending'); }
+function updateNavBadge(){
+  const n = activeUser.role === 'Senior Accountant' ? accessRequests.filter(r => r.status === 'pending').length : 0;
+  const b = document.getElementById('nav-files-badge');
+  b.innerText = n; b.classList.toggle('hidden', n === 0);
+}
+
+function requestAccess(fileId){
+  if (isThreatActive || activeUser.role !== 'Internal Auditor' || myPending()) return;
+  const f = repositoryFiles.find(x => x.id === fileId); if (!f) return;
+  accessRequests.push({ id:'req_' + Date.now(), fileId, fileName:f.name, requesterId:activeUser.id, requesterName:activeUser.name, status:'pending' });
+  addAuditLog('ACCESS_REQUESTED', `${activeUser.name} meminta akses unduh berkas terkunci '${f.name}'. Menunggu persetujuan Senior Accountant.`);
+  renderFilesTable(); updateNavBadge();
+  notify('Permintaan akses terkirim. Menunggu persetujuan Senior Accountant.');
+}
+
+function decideAccess(reqId, approve){
+  if (activeUser.role !== 'Senior Accountant') return;
+  const r = accessRequests.find(x => x.id === reqId && x.status === 'pending'); if (!r) return;
+  r.status = approve ? 'approved' : 'denied';
+  if (approve){
+    accessGrants[r.requesterId] = { expiresAt: Date.now() + ACCESS_WINDOW_MS, downloads: [] };
+    addAuditLog('ACCESS_APPROVED', `${activeUser.name} menyetujui akses ${r.requesterName} ke '${r.fileName}'. Berlaku ${ACCESS_WINDOW_MS / 1000} detik.`);
+  } else {
+    addAuditLog('ACCESS_REJECTED', `${activeUser.name} menolak permintaan akses ${r.requesterName} ke '${r.fileName}'.`);
+  }
+  renderFilesTable(); updateNavBadge();
+}
+
+function gateDownload(file){
+  if (!isLocked(file) || activeUser.role === 'Senior Accountant') return true;
+  const g = validGrant(activeUser.id);
+  if (!g){
+    closeDownloadModal(); renderFilesTable();
+    addAuditLog('ACCESS_BLOCKED', `${activeUser.name} ditolak mengunduh '${file.name}'. Tidak ada persetujuan aktif.`);
+    notify('Akses berkas terkunci tidak berlaku. Ajukan permintaan ke Senior Accountant.');
+    return false;
+  }
+  if (g.downloads.length + 1 >= DOWNLOAD_ALERT_COUNT){
+    delete accessGrants[activeUser.id];
+    addAuditLog('THREAT_MASS_DOWNLOAD', `${activeUser.name} mencoba mengunduh ${g.downloads.length + 1} berkas terkunci dalam satu jendela akses. Akses dicabut.`);
+    closeDownloadModal();
+    toggleThreatBlur(true, 'mass-download');
+    renderFilesTable();
+    return false;
+  }
+  g.downloads.push(file.id);
+  return true;
+}
+
 function renderFilesTable(){
+  const tbody = document.getElementById('files-table-body'), panel = document.getElementById('access-requests-panel');
+  const isAud = activeUser.role === 'Internal Auditor', isSen = activeUser.role === 'Senior Accountant';
+  const g = validGrant(activeUser.id), pend = myPending();
+  const bd = 'px-2 py-0.5 text-[10px] rounded border ';
+  const btn = 'text-xs font-semibold px-3 py-1.5 rounded-lg transition border ';
+  tbody.innerHTML = '';
+  repositoryFiles.forEach(f => {
+    const dl = `<button onclick='openDownloadModal("${f.id}")' class='${btn}bg-purple-950/80 hover:bg-purple-900 text-purple-300 border-purple-800'>⬇ Unduh File</button>`;
+    let status, action;
+    if (!isLocked(f)){ status = `<span class='${bd}bg-emerald-950 text-emerald-400 border-emerald-800'>🔓 Terbuka</span>`; action = dl; }
+    else if (isSen){ status = `<span class='${bd}bg-rose-950 text-rose-300 border-rose-800'>🔒 Terkunci</span>`; action = dl; }
+    else if (g){ status = `<span class='${bd}bg-amber-950 text-amber-300 border-amber-700'>⏱ Akses <span class='grant-timer' data-exp='${g.expiresAt}'>${fmtLeft(g.expiresAt - Date.now())}</span></span>`; action = dl; }
+    else if (pend){
+      status = pend.fileId === f.id ? `<span class='${bd}bg-slate-900 text-slate-300 border-slate-700'>⏳ Menunggu persetujuan</span>` : `<span class='${bd}bg-rose-950 text-rose-300 border-rose-800'>🔒 Terkunci</span>`;
+      action = `<button disabled class='${btn}bg-slate-900 text-slate-500 border-slate-800 cursor-not-allowed'>Menunggu</button>`;
+    } else {
+      status = `<span class='${bd}bg-rose-950 text-rose-300 border-rose-800'>🔒 Terkunci</span>`;
+      action = `<button onclick='requestAccess("${f.id}")' class='${btn}bg-amber-950/70 hover:bg-amber-900 text-amber-300 border-amber-700'>🔑 Minta Akses</button>`;
+    }
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-slate-900/50 transition';
+    tr.innerHTML = `<td class='p-3 font-semibold text-white'>📄 ${esc(f.name)}</td><td class='p-3 text-slate-400'>${f.size}</td><td class='p-3 text-slate-400'>${f.date}</td><td class='p-3 text-purple-400 font-mono text-[10px]'>${f.hash.slice(0, 16)}...</td><td class='p-3 text-center'>${status}</td><td class='p-3 text-center'>${action}</td>`;
+    tbody.appendChild(tr);
+  });
+  if (isSen){
+    const list = accessRequests.filter(r => r.status === 'pending');
+    panel.innerHTML = list.length ? `<div class='border border-amber-700/60 bg-amber-950/30 rounded-xl p-4 space-y-3'><div class='text-xs font-bold text-amber-300'>🔔 Permintaan Akses Berkas Terkunci (${list.length})</div>${list.map(r => `<div class='flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs'><span class='text-slate-200'>${esc(r.requesterName)} meminta akses ke <strong>${esc(r.fileName)}</strong></span><span class='flex gap-2'><button onclick='decideAccess("${r.id}", true)' class='${btn}bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border-emerald-700'>Setujui (${ACCESS_WINDOW_MS / 1000} detik)</button><button onclick='decideAccess("${r.id}", false)' class='${btn}bg-rose-950 hover:bg-rose-900 text-rose-300 border-rose-800'>Tolak</button></span></div>`).join('')}</div>` : '';
+  } else if (isAud){
+    panel.innerHTML = `<div class='text-[11px] text-slate-400 border border-slate-800 bg-slate-950/50 rounded-xl px-4 py-3 leading-relaxed'>Berkas terkunci hanya bisa diunduh setelah disetujui Senior Accountant. Persetujuan berlaku ${ACCESS_WINDOW_MS / 1000} detik, dan mengunduh beberapa berkas terkunci dalam waktu itu akan memicu peringatan keamanan.</div>`;
+  } else { panel.innerHTML = ''; }
+}
+
+function renderFilesTableOld(){
   const tbody = document.getElementById('files-table-body');
   tbody.innerHTML = '';
   repositoryFiles.forEach(f => {
@@ -636,6 +734,8 @@ function closeDownloadModal(){ document.getElementById('download-modal').classLi
 
 function executeForensicDownload(){
   if (isThreatActive) return;
+  if (!selectedFileForDownload) return;
+  if (!gateDownload(selectedFileForDownload)) return;
   if (!selectedFileForDownload) return;
   const name = selectedFileForDownload.name;
   const blob = new Blob([selectedFileForDownload.content], { type:'text/plain' });
@@ -692,6 +792,19 @@ function performLogout(reason){
     w.style.top = clamp(parseFloat(w.style.top), window.innerHeight - w.offsetHeight) + 'px';
   });
 })();
+
+// Pencabutan otomatis akses berkas terkunci dan penyegaran hitung mundur
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(accessGrants).forEach(uid => {
+    if (accessGrants[uid].expiresAt <= now){
+      delete accessGrants[uid];
+      addAuditLog('ACCESS_EXPIRED', `Jendela akses berkas terkunci untuk ${uid} berakhir.`);
+      if (document.getElementById('screen-files').classList.contains('active')) renderFilesTable();
+    }
+  });
+  document.querySelectorAll('.grant-timer').forEach(el => { el.textContent = fmtLeft(el.dataset.exp - now); });
+}, 1000);
 
 window.onload = function(){
   refreshEnrollStatus();
