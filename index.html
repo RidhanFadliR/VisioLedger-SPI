@@ -813,9 +813,10 @@ function performLogout(reason){
 })();
 
 // ===== AI VISUAL SAFEGUARD: kamera menyala + deteksi wajah pengguna =====
-const PRESENCE_THRESHOLD = 0.65;  // kemiripan minimal agar wajah dianggap ada (naikkan = lebih ketat, turunkan = lebih longgar; lihat angka di widget)
+const PRESENCE_THRESHOLD = 0.45;  // kemiripan minimal agar wajah dianggap ada (makin kecil = makin longgar; lihat angka di widget)
+let guardRefs = [];               // pembanding wajah, ikut menyesuaikan cahaya & posisi kepala selama sesi
 const GUARD_INTERVAL_MS = 500;    // seberapa sering wajah dicek
-const LOST_AFTER = 3;             // jumlah cek berturut-turut tanpa wajah sebelum layar diburamkan (3 x 0,5 dtk)
+const LOST_AFTER = 6;             // cek berturut-turut tanpa wajah sebelum layar diburamkan (6 x 0,5 dtk = 3 detik)
 const BACK_AFTER = 2;             // jumlah cek berturut-turut dengan wajah sebelum layar dipulihkan
 let guardStream = null, guardTimer = null, guardBusy = false, guardMiss = 0, guardHit = 0, threatReason = null, faceDetector = null;
 try { if ('FaceDetector' in window) faceDetector = new FaceDetector({ fastMode:true, maxDetectedFaces:1 }); } catch(e){ faceDetector = null; }
@@ -844,7 +845,7 @@ function stopGuard(){
   v.srcObject = null; v.classList.add('hidden');
   document.getElementById('guard-placeholder').classList.remove('hidden');
   guardSetStatus('Kamera mati', 'text-slate-400');
-  guardMiss = 0; guardHit = 0; guardBusy = false;
+  guardMiss = 0; guardHit = 0; guardBusy = false; guardRefs = [];
 }
 
 async function guardTick(){
@@ -854,12 +855,17 @@ async function guardTick(){
   guardBusy = true;
   try {
     const live = guardStream.getVideoTracks().every(t => t.readyState === 'live');
-    const ref = faceStore[activeUser.id] || [];
+    const base = faceStore[activeUser.id] || [];
+    if (!guardRefs.length) guardRefs = base.slice();
     const d = grabDescriptor(v);
     let best = 0;
-    ref.forEach(r => { best = Math.max(best, similarity(d, r)); });
+    guardRefs.forEach(r => { best = Math.max(best, similarity(d, r)); });
     let present = live && best >= PRESENCE_THRESHOLD;
-    if (present && faceDetector){ try { present = (await faceDetector.detect(v)).length > 0; } catch(e){} }
+    if (faceDetector && live){ try { present = (await faceDetector.detect(v)).length > 0; } catch(e){} }
+    if (present && best >= PRESENCE_THRESHOLD + 0.1){
+      guardRefs.push(d);
+      if (guardRefs.length > base.length + 12) guardRefs.splice(base.length, 1);
+    }
     const pct = Math.round(Math.max(0, best) * 100);
     if (present){ guardHit++; guardMiss = 0; } else { guardMiss++; guardHit = 0; }
     guardSetStatus(present ? `Wajah ${pct}%` : (live ? `Wajah hilang ${pct}%` : 'Kamera terputus'), present ? 'text-emerald-400' : 'text-rose-400');
