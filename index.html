@@ -608,7 +608,7 @@ const ACCESS_WINDOW_MS = 60000;      // lama akses setelah disetujui (60 detik)
 const DOWNLOAD_ALERT_COUNT = 2;      // unduhan berkas terkunci dalam satu jendela akses yang memicu ancaman
 const DEFAULT_THREAT_TEXT = 'Lensa kamera ponsel atau perangkat perekam terdeteksi di belakang pengguna. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir sampai ancaman dinyatakan selesai.';
 let accessRequests = [], accessGrants = {};
-repositoryFiles.find(f => f.id === 'file_003').locked = false; // berkas lain dan unggahan baru terkunci secara default
+// semua berkas, termasuk unggahan baru, terkunci secara default
 
 function isLocked(f){ return f.locked !== false; }
 function fmtLeft(ms){ const s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
