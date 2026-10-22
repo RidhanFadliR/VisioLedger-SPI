@@ -111,7 +111,7 @@ table th { white-space:nowrap; padding:.75rem 1rem; vertical-align:middle; }
     <div class="mt-4 pt-4 border-t border-slate-800 space-y-1.5">
       <label class="block text-[11px] font-semibold text-slate-300 text-center">Kode Aktivasi</label>
       <input type="password" id="enroll-code" autocomplete="off" placeholder="Kode dari admin, hanya untuk Daftarkan Wajah" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500">
-      <div class="pt-1 text-center"><button type="button" onclick="resetDemoData()" title="Hanya untuk pengujian, hapus di versi produksi" class="text-[10px] text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-800 rounded-md px-2.5 py-1 transition">↺ Reset data demo</button></div>
+      <div class="pt-1 text-center"><button type="button" id="btn-reset-time" onclick="resetSimulatedTime()" class="hidden mr-1 text-[10px] text-amber-300 hover:text-amber-200 border border-amber-800 rounded-md px-2.5 py-1 transition">🕒 Kembalikan jam normal</button><button type="button" onclick="resetDemoData()" title="Hanya untuk pengujian, hapus di versi produksi" class="text-[10px] text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-800 rounded-md px-2.5 py-1 transition">↺ Reset data demo</button></div>
     </div>
     <div class="mt-4 text-center"><span class="text-[10px] text-slate-500 font-mono">Terkoneksi Terenkripsi Kriptografi SSL 256-bit</span></div>
   </div>
@@ -300,6 +300,18 @@ let repositoryFiles = [
 
 function notify(msg){ try { alert(msg); } catch(e) { console.log(msg); } }
 
+// ===== PEMBATASAN JAM AKSES: 23.00 - 07.00 WIB ditutup untuk semua peran =====
+const WORK_START_HOUR = 7, WORK_END_HOUR = 23;   // akses dibuka 07.00 sampai sebelum 23.00 WIB
+let forceOffHours = false;                       // dipakai tombol simulasi
+function wibHour(){
+  try { return parseInt(new Intl.DateTimeFormat('en-GB', { timeZone:'Asia/Jakarta', hour:'2-digit', hour12:false }).format(new Date()), 10) % 24; }
+  catch(e){ return (new Date().getUTCHours() + 7) % 24; }
+}
+function isOffHours(){ if (forceOffHours) return true; const h = wibHour(); return h >= WORK_END_HOUR || h < WORK_START_HOUR; }
+const OFFHOURS_TEXT = 'Akses ditolak: sistem hanya dapat diakses pukul 07.00 - 23.00 WIB. Berlaku untuk Senior Accountant maupun Internal Auditor.';
+function refreshTimeResetBtn(){ document.getElementById('btn-reset-time').classList.toggle('hidden', !forceOffHours); }
+function resetSimulatedTime(){ forceOffHours = false; refreshTimeResetBtn(); refreshEnrollStatus(); }
+
 function formatAmountInput(el){
   const digits = el.value.replace(/\D/g, '');
   el.value = digits ? parseInt(digits, 10).toLocaleString('id-ID') : '';
@@ -452,9 +464,73 @@ function resetDemoData(){
   stopCamera(); refreshEnrollStatus();
 }
 
+// ===== UJI KEASLIAN WAJAH (anti foto / layar) =====
+// Foto atau layar HP bergerak kaku: semua bagian gambar berubah bersamaan, dan tidak ada kedipan.
+// Wajah asli berubah setempat (mata berkedip, mulut terbuka) saat dahi dan latar relatif diam.
+const LIVE_FRAMES = 40, LIVE_INTERVAL_MS = 100;
+const LIVE_MIN_EVENTS = 2;     // minimal kejadian kedip / buka mulut
+const LIVE_LOCAL_DELTA = 2.2;  // selisih perubahan zona mata/mulut dibanding dahi (turunkan jika sulit lolos)
+const LIVE_RATIO = 2.0;        // zona mata/mulut harus berubah minimal sekian kali dahi
+const LIVE_MAX_RIGID = 0.5;    // jika lebih dari 50% frame bergerak kaku seluruhnya, dianggap foto digoyang
+function grabLiveFrame(v){
+  const N = 64, cv = document.createElement('canvas'); cv.width = N; cv.height = N;
+  const x = cv.getContext('2d', { willReadFrequently:true });
+  const vw = v.videoWidth, vh = v.videoHeight, s = Math.min(vw, vh) * 0.65;
+  x.drawImage(v, (vw - s) / 2, (vh - s) / 2, s, s, 0, 0, N, N);
+  const d = x.getImageData(0, 0, N, N).data, g = new Float32Array(N * N);
+  let m = 0;
+  for (let i = 0; i < N * N; i++){ g[i] = 0.299 * d[4*i] + 0.587 * d[4*i+1] + 0.114 * d[4*i+2]; m += g[i]; }
+  m /= N * N;
+  for (let i = 0; i < N * N; i++) g[i] -= m;   // buang efek perubahan cahaya / auto-exposure
+  return g;
+}
+function zoneDiff(a, b, fx0, fy0, fx1, fy1){
+  const N = 64, x0 = Math.floor(fx0 * N), x1 = Math.floor(fx1 * N), y0 = Math.floor(fy0 * N), y1 = Math.floor(fy1 * N);
+  let s = 0, c = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++){ s += Math.abs(a[y*N + x] - b[y*N + x]); c++; }
+  return s / (c || 1);
+}
+async function livenessCheck(u){
+  const v = document.getElementById('cam-video'), laser = document.getElementById('login-scan-laser'), frame = document.getElementById('login-face-frame');
+  laser.classList.remove('hidden');
+  setStatus('Uji keaslian: kedipkan mata 2 kali, lalu buka mulut sebentar. Tetap diam, jangan gerakkan kepala.', 'text-cyan-400 font-bold animate-pulse');
+  await wait(600);
+  let prev = null, events = 0, active = { eye:false, mouth:false }, rigid = 0, counted = 0;
+  for (let i = 0; i < LIVE_FRAMES; i++){
+    const cur = grabLiveFrame(v);
+    if (prev){
+      const fore = zoneDiff(cur, prev, 0.2, 0.05, 0.8, 0.2);
+      const eye = zoneDiff(cur, prev, 0.2, 0.25, 0.8, 0.42);
+      const mouth = zoneDiff(cur, prev, 0.3, 0.62, 0.7, 0.85);
+      const all = zoneDiff(cur, prev, 0, 0, 1, 1);
+      counted++;
+      if (all > 6 && fore > 4) rigid++;
+      [['eye', eye], ['mouth', mouth]].forEach(([k, val]) => {
+        const hit = (val - fore) >= LIVE_LOCAL_DELTA && val >= LIVE_RATIO * fore;
+        if (hit && !active[k]) events++;
+        active[k] = hit;
+      });
+    }
+    prev = cur; await wait(LIVE_INTERVAL_MS);
+  }
+  laser.classList.add('hidden');
+  const rigidShare = counted ? rigid / counted : 0;
+  if (events >= LIVE_MIN_EVENTS && rigidShare <= LIVE_MAX_RIGID) return true;
+  frame.className = 'w-28 h-36 border-2 border-rose-500 rounded-full flex flex-col items-center justify-center relative z-10 transition-all duration-300';
+  const why = rigidShare > LIVE_MAX_RIGID ? 'gambar bergerak kaku seperti foto/layar' : `gerakan wajah asli tidak terdeteksi (${events}/${LIVE_MIN_EVENTS})`;
+  setStatus(`Uji keaslian gagal: ${why}. Akses ditolak.`, 'text-rose-400 font-bold');
+  addAuditLog('THREAT_SPOOF_SUSPECTED', `Percobaan ${u.name} ditolak: uji keaslian wajah gagal (${why}). Dugaan penggunaan foto atau layar.`);
+  return false;
+}
+
 async function enrollFace(){
   const u = curUser();
   const codeEl = document.getElementById('enroll-code');
+  if (isOffHours()){
+    activeUser = u; setStatus(OFFHOURS_TEXT, 'text-rose-400 font-bold');
+    addAuditLog('THREAT_OFFHOURS_DENIED', `Pendaftaran wajah ${u.name} ditolak: di luar jam akses 07.00 - 23.00 WIB`);
+    return;
+  }
   if (codeEl.value.trim().toUpperCase() !== ACTIVATION_CODES[u.id]){
     activeUser = u;
     setStatus(`Kode aktivasi salah. Pendaftaran wajah ${u.name} ditolak.`, 'text-rose-400 font-bold');
@@ -474,6 +550,7 @@ async function enrollFace(){
   }
   codeEl.value = '';
   if (!(await startCamera())) return;
+  if (!(await livenessCheck(u))) return;
   const laser = document.getElementById('login-scan-laser');
   laser.classList.remove('hidden');
   setStatus('Mendaftarkan wajah... tatap kamera, gerakkan kepala sedikit ke kiri dan kanan', 'text-cyan-400 font-bold animate-pulse');
@@ -495,9 +572,15 @@ async function enrollFace(){
 
 async function simulateBiometricLogin(){
   const u = curUser(), ref = faceStore[u.id];
+  if (isOffHours()){
+    activeUser = u; setStatus(OFFHOURS_TEXT, 'text-rose-400 font-bold');
+    addAuditLog('THREAT_OFFHOURS_DENIED', `Percobaan masuk ${u.name} (${u.role}) ditolak: di luar jam akses 07.00 - 23.00 WIB`);
+    return;
+  }
   if (!ref){ setStatus(`Wajah ${u.name} belum terdaftar. Klik "Daftarkan Wajah" dulu.`, 'text-amber-400 font-bold'); return; }
   if (!(await startCamera())) return;
   activeUser = u;
+  if (!(await livenessCheck(u))) return;
   const laser = document.getElementById('login-scan-laser'), frame = document.getElementById('login-face-frame');
   frame.className = 'w-28 h-36 border-2 border-dashed border-cyan-500/40 rounded-full flex flex-col items-center justify-center relative z-10 transition-all duration-300 pulse-ring';
   laser.classList.remove('hidden');
@@ -768,6 +851,7 @@ function executeForensicDownload(){
 }
 
 function simulateOffHourLogout(){
+  forceOffHours = true; refreshTimeResetBtn();
   addAuditLog("SECURITY_AUTO_LOGOUT", "Sesi Dihentikan Otomatis: Akses Abnormal Luar Jam Kerja Terdeteksi (23:14 WIB).");
   notify("SECURITY LOCKDOWN ENFORCED:\n\nAkses Luar Jam Kerja Terdeteksi (23:14 WIB)!\nSistem Melakukan Auto-Logout Otomatis.");
   performLogout("Auto-Logout Luar Jam Kerja");
@@ -877,6 +961,12 @@ async function guardTick(){
 // Pencabutan otomatis akses berkas terkunci dan penyegaran hitung mundur
 setInterval(() => {
   const now = Date.now();
+  if (isLoggedIn && isOffHours()){
+    addAuditLog('SECURITY_AUTO_LOGOUT', `Sesi dihentikan otomatis: di luar jam akses 07.00 - 23.00 WIB (${activeUser.name}).`);
+    performLogout('Auto-Logout Luar Jam Kerja');
+    notify('Sesi dihentikan: sistem tidak dapat diakses pukul 23.00 - 07.00 WIB.');
+    return;
+  }
   Object.keys(accessGrants).forEach(uid => {
     if (accessGrants[uid].expiresAt <= now){
       delete accessGrants[uid];
