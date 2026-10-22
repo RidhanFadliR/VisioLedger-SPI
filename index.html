@@ -377,9 +377,9 @@ function switchScreen(id){
 
 // ===== FACE ID (prototipe: pencocokan pola wajah di browser) =====
 const FACE_KEY = 'visioledger_faces_v2';
-const DUP_THRESHOLD = 0.85;  // pendaftaran ditolak hanya jika wajah SANGAT mirip dengan akun lain (orang yang sama)
-const FACE_MARGIN = 0.03;    // saat masuk, kemiripan dengan akun sendiri harus lebih tinggi dari akun lain minimal sekian
-const FACE_THRESHOLD = 0.75; // naikkan agar lebih ketat, turunkan agar lebih longgar (lihat skor di pesan status)
+const DUP_THRESHOLD = 0.9;   // pendaftaran ditolak hanya jika wajah SANGAT mirip dengan akun lain (orang yang sama)
+const FACE_MARGIN = 0.005;   // saat masuk, kemiripan dengan akun sendiri harus lebih tinggi dari akun lain minimal sekian
+const FACE_THRESHOLD = 0.6; // naikkan agar lebih ketat, turunkan agar lebih longgar (lihat skor di pesan status)
 let camStream = null;
 function loadFaces(){ try { return JSON.parse(localStorage.getItem(FACE_KEY) || '{}'); } catch(e){ return {}; } }
 function saveFaces(f){ try { localStorage.setItem(FACE_KEY, JSON.stringify(f)); } catch(e){} }
@@ -469,12 +469,12 @@ function resetDemoData(){
 // ===== UJI KEASLIAN WAJAH (anti foto / layar) =====
 // Foto atau layar HP bergerak kaku: semua bagian gambar berubah bersamaan, dan tidak ada kedipan.
 // Wajah asli berubah setempat (mata berkedip, mulut terbuka) saat dahi dan latar relatif diam.
-const LIVE_BLINK_FRAMES = 30, LIVE_TURN_FRAMES = 45, LIVE_INTERVAL_MS = 100;
-const LIVE_MIN_BLINKS = 2;     // minimal jumlah kedipan
-const LIVE_LOCAL_DELTA = 2.2;  // selisih perubahan zona mata dibanding dahi (turunkan jika sulit lolos)
-const LIVE_RATIO = 2.0;        // zona mata harus berubah minimal sekian kali dahi
-const LIVE_MAX_RIGID = 0.5;    // jika lebih dari 50% frame bergerak kaku seluruhnya, dianggap foto digoyang
-const LIVE_TURN_PX = 3;        // geser minimal (piksel pada gambar 64px) ke kiri dan ke kanan saat menoleh
+const LIVE_BLINK_FRAMES = 40, LIVE_TURN_FRAMES = 50, LIVE_INTERVAL_MS = 100;
+const LIVE_MIN_BLINKS = 1;     // minimal jumlah kedipan
+const LIVE_LOCAL_DELTA = 1.0;  // selisih perubahan zona mata dibanding dahi (turunkan jika sulit lolos)
+const LIVE_RATIO = 1.4;        // zona mata harus berubah minimal sekian kali dahi
+const LIVE_MAX_RIGID = 0.75;   // jika lebih dari 75% frame bergerak kaku seluruhnya, dianggap foto digoyang
+const LIVE_TURN_PX = 2;        // geser minimal (piksel pada gambar 64px) ke kiri dan ke kanan saat menoleh
 function bestShift(a, b){
   const N = 64; let best = 0, bd = Infinity, d0 = 0;
   for (let dx = -4; dx <= 4; dx++){
@@ -483,7 +483,7 @@ function bestShift(a, b){
     s /= c; if (dx === 0) d0 = s;
     if (s < bd){ bd = s; best = dx; }
   }
-  return bd < d0 * 0.9 ? best : 0;   // abaikan kalau tidak jelas (noise)
+  return bd < d0 * 0.96 ? best : 0;   // abaikan kalau tidak jelas (noise)
 }
 function grabLiveFrame(v){
   const N = 64, cv = document.createElement('canvas'); cv.width = N; cv.height = N;
