@@ -377,6 +377,8 @@ function switchScreen(id){
 
 // ===== FACE ID (prototipe: pencocokan pola wajah di browser) =====
 const FACE_KEY = 'visioledger_faces_v2';
+const DUP_THRESHOLD = 0.85;  // pendaftaran ditolak hanya jika wajah SANGAT mirip dengan akun lain (orang yang sama)
+const FACE_MARGIN = 0.03;    // saat masuk, kemiripan dengan akun sendiri harus lebih tinggi dari akun lain minimal sekian
 const FACE_THRESHOLD = 0.75; // naikkan agar lebih ketat, turunkan agar lebih longgar (lihat skor di pesan status)
 let camStream = null;
 function loadFaces(){ try { return JSON.parse(localStorage.getItem(FACE_KEY) || '{}'); } catch(e){ return {}; } }
@@ -580,10 +582,15 @@ async function enrollFace(){
   const samples = [];
   for (let i = 0; i < 8; i++){ samples.push(grabDescriptor()); await wait(450); }
   laser.classList.add('hidden');
-  const dupId = Object.keys(faceStore).find(id => id !== u.id && samples.some(s => faceStore[id].some(r => similarity(s, r) >= FACE_THRESHOLD)));
+  let dupId = null, dupScore = 0;
+  Object.keys(faceStore).forEach(id => {
+    if (id === u.id) return;
+    let m = 0; samples.forEach(s => faceStore[id].forEach(r => { m = Math.max(m, similarity(s, r)); }));
+    if (m >= DUP_THRESHOLD && m > dupScore){ dupId = id; dupScore = m; }
+  });
   if (dupId){
-    setStatus('Wajah ini sudah terdaftar di akun lain. Satu wajah hanya boleh untuk satu akun.', 'text-rose-400 font-bold');
-    addAuditLog('THREAT_ENROLL_DENIED', `Pendaftaran wajah ${u.name} ditolak: wajah sama dengan akun ${dupId}`);
+    setStatus(`Wajah ini sudah terdaftar di akun lain (kemiripan ${Math.round(dupScore * 100)}%). Satu wajah hanya boleh untuk satu akun.`, 'text-rose-400 font-bold');
+    addAuditLog('THREAT_ENROLL_DENIED', `Pendaftaran wajah ${u.name} ditolak: wajah sama dengan akun ${dupId} (kemiripan ${Math.round(dupScore * 100)}%)`);
     return;
   }
   faceStore[u.id] = samples; saveFaces(faceStore);
@@ -613,14 +620,17 @@ async function simulateBiometricLogin(){
   laser.classList.add('hidden');
   let best = 0;
   probes.forEach(p => ref.forEach(r => { best = Math.max(best, similarity(p, r)); }));
+  let otherBest = 0;
+  Object.keys(faceStore).forEach(id => { if (id !== u.id) probes.forEach(p => faceStore[id].forEach(r => { otherBest = Math.max(otherBest, similarity(p, r)); })); });
   const pct = Math.round(best * 100), min = Math.round(FACE_THRESHOLD * 100);
-  if (best >= FACE_THRESHOLD){
+  if (best >= FACE_THRESHOLD && best >= otherBest + FACE_MARGIN){
     stopCamera();
     completeLogin();
   } else {
     frame.className = 'w-28 h-36 border-2 border-rose-500 rounded-full flex flex-col items-center justify-center relative z-10 transition-all duration-300';
-    setStatus(`Wajah tidak cocok dengan ${u.name} (kemiripan ${pct}%, minimal ${min}%). Akses ditolak.`, 'text-rose-400 font-bold');
-    addAuditLog('THREAT_FACE_MISMATCH', `Percobaan masuk sebagai ${u.name} ditolak. Kemiripan ${pct}% di bawah ambang ${min}%`);
+    const other = best >= FACE_THRESHOLD;   // cukup mirip, tapi lebih mirip akun lain
+    setStatus(other ? `Wajah lebih mirip akun lain (${Math.round(otherBest * 100)}%) daripada ${u.name} (${pct}%). Akses ditolak.` : `Wajah tidak cocok dengan ${u.name} (kemiripan ${pct}%, minimal ${min}%). Akses ditolak.`, 'text-rose-400 font-bold');
+    addAuditLog('THREAT_FACE_MISMATCH', other ? `Percobaan masuk sebagai ${u.name} ditolak: wajah lebih mirip akun lain (${Math.round(otherBest * 100)}% vs ${pct}%)` : `Percobaan masuk sebagai ${u.name} ditolak. Kemiripan ${pct}% di bawah ambang ${min}%`);
   }
 }
 
@@ -875,6 +885,7 @@ function executeForensicDownload(){
 
 function simulateOffHourLogout(){
   forceOffHours = true; refreshTimeResetBtn();
+  setTimeout(() => { if (forceOffHours) resetSimulatedTime(); }, 20000);   // simulasi otomatis berakhir setelah 20 detik
   addAuditLog("SECURITY_AUTO_LOGOUT", "Sesi Dihentikan Otomatis: Akses Abnormal Luar Jam Kerja Terdeteksi (23:14 WIB).");
   notify("SECURITY LOCKDOWN ENFORCED:\n\nAkses Luar Jam Kerja Terdeteksi (23:14 WIB)!\nSistem Melakukan Auto-Logout Otomatis.");
   performLogout("Auto-Logout Luar Jam Kerja");
