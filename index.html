@@ -467,11 +467,22 @@ function resetDemoData(){
 // ===== UJI KEASLIAN WAJAH (anti foto / layar) =====
 // Foto atau layar HP bergerak kaku: semua bagian gambar berubah bersamaan, dan tidak ada kedipan.
 // Wajah asli berubah setempat (mata berkedip, mulut terbuka) saat dahi dan latar relatif diam.
-const LIVE_FRAMES = 40, LIVE_INTERVAL_MS = 100;
-const LIVE_MIN_EVENTS = 2;     // minimal kejadian kedip / buka mulut
-const LIVE_LOCAL_DELTA = 2.2;  // selisih perubahan zona mata/mulut dibanding dahi (turunkan jika sulit lolos)
-const LIVE_RATIO = 2.0;        // zona mata/mulut harus berubah minimal sekian kali dahi
+const LIVE_BLINK_FRAMES = 30, LIVE_TURN_FRAMES = 45, LIVE_INTERVAL_MS = 100;
+const LIVE_MIN_BLINKS = 2;     // minimal jumlah kedipan
+const LIVE_LOCAL_DELTA = 2.2;  // selisih perubahan zona mata dibanding dahi (turunkan jika sulit lolos)
+const LIVE_RATIO = 2.0;        // zona mata harus berubah minimal sekian kali dahi
 const LIVE_MAX_RIGID = 0.5;    // jika lebih dari 50% frame bergerak kaku seluruhnya, dianggap foto digoyang
+const LIVE_TURN_PX = 3;        // geser minimal (piksel pada gambar 64px) ke kiri dan ke kanan saat menoleh
+function bestShift(a, b){
+  const N = 64; let best = 0, bd = Infinity, d0 = 0;
+  for (let dx = -4; dx <= 4; dx++){
+    let s = 0, c = 0;
+    for (let y = 13; y < 51; y++) for (let x = 16; x < 48; x++){ s += Math.abs(a[y*N + x] - b[y*N + x + dx]); c++; }
+    s /= c; if (dx === 0) d0 = s;
+    if (s < bd){ bd = s; best = dx; }
+  }
+  return bd < d0 * 0.9 ? best : 0;   // abaikan kalau tidak jelas (noise)
+}
 function grabLiveFrame(v){
   const N = 64, cv = document.createElement('canvas'); cv.width = N; cv.height = N;
   const x = cv.getContext('2d', { willReadFrequently:true });
@@ -493,34 +504,46 @@ function zoneDiff(a, b, fx0, fy0, fx1, fy1){
 async function livenessCheck(u){
   const v = document.getElementById('cam-video'), laser = document.getElementById('login-scan-laser'), frame = document.getElementById('login-face-frame');
   laser.classList.remove('hidden');
-  setStatus('Uji keaslian: kedipkan mata 2 kali, lalu buka mulut sebentar. Tetap diam, jangan gerakkan kepala.', 'text-cyan-400 font-bold animate-pulse');
+  const fail = why => {
+    laser.classList.add('hidden');
+    frame.className = 'w-28 h-36 border-2 border-rose-500 rounded-full flex flex-col items-center justify-center relative z-10 transition-all duration-300';
+    setStatus(`Uji keaslian gagal: ${why}. Akses ditolak.`, 'text-rose-400 font-bold');
+    addAuditLog('THREAT_SPOOF_SUSPECTED', `Percobaan ${u.name} ditolak: uji keaslian wajah gagal (${why}). Dugaan penggunaan foto atau layar.`);
+    return false;
+  };
+  // Tahap 1: berkedip, kepala diam
+  setStatus('Uji keaslian 1/2: kedipkan mata 2 kali. Kepala tetap diam menghadap kamera.', 'text-cyan-400 font-bold animate-pulse');
   await wait(600);
-  let prev = null, events = 0, active = { eye:false, mouth:false }, rigid = 0, counted = 0;
-  for (let i = 0; i < LIVE_FRAMES; i++){
+  let prev = null, blinks = 0, eyeActive = false, rigid = 0, counted = 0;
+  for (let i = 0; i < LIVE_BLINK_FRAMES; i++){
     const cur = grabLiveFrame(v);
     if (prev){
       const fore = zoneDiff(cur, prev, 0.2, 0.05, 0.8, 0.2);
       const eye = zoneDiff(cur, prev, 0.2, 0.25, 0.8, 0.42);
-      const mouth = zoneDiff(cur, prev, 0.3, 0.62, 0.7, 0.85);
       const all = zoneDiff(cur, prev, 0, 0, 1, 1);
       counted++;
       if (all > 6 && fore > 4) rigid++;
-      [['eye', eye], ['mouth', mouth]].forEach(([k, val]) => {
-        const hit = (val - fore) >= LIVE_LOCAL_DELTA && val >= LIVE_RATIO * fore;
-        if (hit && !active[k]) events++;
-        active[k] = hit;
-      });
+      const hit = (eye - fore) >= LIVE_LOCAL_DELTA && eye >= LIVE_RATIO * fore;
+      if (hit && !eyeActive) blinks++;
+      eyeActive = hit;
     }
     prev = cur; await wait(LIVE_INTERVAL_MS);
   }
-  laser.classList.add('hidden');
   const rigidShare = counted ? rigid / counted : 0;
-  if (events >= LIVE_MIN_EVENTS && rigidShare <= LIVE_MAX_RIGID) return true;
-  frame.className = 'w-28 h-36 border-2 border-rose-500 rounded-full flex flex-col items-center justify-center relative z-10 transition-all duration-300';
-  const why = rigidShare > LIVE_MAX_RIGID ? 'gambar bergerak kaku seperti foto/layar' : `gerakan wajah asli tidak terdeteksi (${events}/${LIVE_MIN_EVENTS})`;
-  setStatus(`Uji keaslian gagal: ${why}. Akses ditolak.`, 'text-rose-400 font-bold');
-  addAuditLog('THREAT_SPOOF_SUSPECTED', `Percobaan ${u.name} ditolak: uji keaslian wajah gagal (${why}). Dugaan penggunaan foto atau layar.`);
-  return false;
+  if (rigidShare > LIVE_MAX_RIGID) return fail('gambar bergerak kaku seperti foto/layar');
+  if (blinks < LIVE_MIN_BLINKS) return fail(`kedipan mata tidak terdeteksi (${blinks}/${LIVE_MIN_BLINKS})`);
+  // Tahap 2: menoleh ke kiri lalu ke kanan
+  setStatus('Uji keaslian 2/2: tengok ke kiri, lalu ke kanan, perlahan.', 'text-cyan-400 font-bold animate-pulse');
+  await wait(500);
+  prev = null; let pos = 0, minPos = 0, maxPos = 0;
+  for (let i = 0; i < LIVE_TURN_FRAMES; i++){
+    const cur = grabLiveFrame(v);
+    if (prev){ pos += bestShift(prev, cur); minPos = Math.min(minPos, pos); maxPos = Math.max(maxPos, pos); }
+    prev = cur; await wait(LIVE_INTERVAL_MS);
+  }
+  laser.classList.add('hidden');
+  if (minPos > -LIVE_TURN_PX || maxPos < LIVE_TURN_PX) return fail(`tengok kiri-kanan tidak terdeteksi (kiri ${-minPos}/${LIVE_TURN_PX}, kanan ${maxPos}/${LIVE_TURN_PX})`);
+  return true;
 }
 
 async function enrollFace(){
