@@ -931,10 +931,10 @@ function performLogout(reason){
 })();
 
 // ===== AI VISUAL SAFEGUARD: kamera menyala + deteksi wajah pengguna =====
-const PRESENCE_THRESHOLD = 0.45;  // kemiripan minimal agar wajah dianggap ada (makin kecil = makin longgar; lihat angka di widget)
+const PRESENCE_THRESHOLD = 0.3;  // kemiripan minimal agar wajah dianggap ada (makin kecil = makin longgar; lihat angka di widget)
 let guardRefs = [];               // pembanding wajah, ikut menyesuaikan cahaya & posisi kepala selama sesi
 const GUARD_INTERVAL_MS = 500;    // seberapa sering wajah dicek
-const LOST_AFTER = 6;             // cek berturut-turut tanpa wajah sebelum layar diburamkan (6 x 0,5 dtk = 3 detik)
+const LOST_AFTER = 4;             // cek berturut-turut tanpa wajah sebelum layar diburamkan (4 x 0,5 dtk = 2 detik)
 const BACK_AFTER = 2;             // jumlah cek berturut-turut dengan wajah sebelum layar dipulihkan
 let guardStream = null, guardTimer = null, guardBusy = false, guardMiss = 0, guardHit = 0, threatReason = null, faceDetector = null;
 try { if ('FaceDetector' in window) faceDetector = new FaceDetector({ fastMode:true, maxDetectedFaces:1 }); } catch(e){ faceDetector = null; }
@@ -951,6 +951,14 @@ async function startGuard(){
   v.srcObject = guardStream; v.classList.remove('hidden');
   document.getElementById('guard-placeholder').classList.add('hidden');
   try { await v.play(); } catch(e){}
+  // Pengguna baru saja lolos login, jadi ambil contoh wajah dengan cahaya & posisi saat ini sebagai pembanding tambahan
+  guardSetStatus('Menyesuaikan...', 'text-cyan-400');
+  try {
+    await wait(600);
+    guardRefs = (faceStore[activeUser.id] || []).slice();
+    for (let i = 0; i < 5 && guardStream; i++){ guardRefs.push(grabDescriptor(v)); await wait(250); }
+  } catch(e){}
+  if (!guardStream) return;
   guardMiss = 0; guardHit = 0;
   guardSetStatus('Memindai...', 'text-cyan-400');
   guardTimer = setInterval(guardTick, GUARD_INTERVAL_MS);
@@ -979,7 +987,7 @@ async function guardTick(){
     let best = 0;
     guardRefs.forEach(r => { best = Math.max(best, similarity(d, r)); });
     let present = live && best >= PRESENCE_THRESHOLD;
-    if (faceDetector && live){ try { present = (await faceDetector.detect(v)).length > 0; } catch(e){} }
+    if (faceDetector && live && !present){ try { present = (await faceDetector.detect(v)).length > 0; } catch(e){} }
     if (present && best >= PRESENCE_THRESHOLD + 0.1){
       guardRefs.push(d);
       if (guardRefs.length > base.length + 12) guardRefs.splice(base.length, 1);
