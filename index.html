@@ -691,7 +691,7 @@ function toggleThreatBlur(active, reason){
     const ob = document.querySelector('#global-threat-overlay button');
     if (ob) ob.classList.toggle('hidden', threatReason === 'face-lost');
     if (threatReason === 'face-lost'){
-      document.getElementById('threat-overlay-text').textContent = 'Wajah pengguna tidak terdeteksi di depan kamera. Seluruh layar diburamkan, dan aksi unduh serta unggah berkas diblokir. Tampilan pulih otomatis begitu wajah terdeteksi lagi.';
+      document.getElementById('threat-overlay-text').textContent = 'Wajah tidak terdeteksi. Layar diburamkan dan akses berkas diblokir hingga wajah terdeteksi kembali.';
       document.getElementById('webcam-threat-badge').textContent = 'FACE LOST';
       addAuditLog('THREAT_FACE_LOST', 'Wajah pengguna hilang dari kamera. Seluruh layar diburamkan, aksi unduh dan unggah diblokir.');
     } else {
